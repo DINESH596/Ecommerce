@@ -1,0 +1,103 @@
+WITH base_orders AS (
+    SELECT 
+        o.customer_id,
+        c.customer_name,
+        o.order_id,
+        o.order_date,
+        o.amount,
+        o.region,
+
+        -- Deduplicate (latest record per order)
+        ROW_NUMBER() OVER (
+            PARTITION BY o.order_id 
+            ORDER BY o.order_date DESC
+        ) AS rn
+    FROM orders o
+    JOIN customers c 
+        ON o.customer_id = c.customer_id
+),
+
+clean_orders AS (
+    SELECT *
+    FROM base_orders
+    WHERE rn = 1
+),
+
+customer_metrics AS (
+    SELECT 
+        customer_id,
+        customer_name,
+        region,
+        order_id,
+        order_date,
+        amount,
+
+        -- Previous order date
+        LAG(order_date) OVER (
+            PARTITION BY customer_id 
+            ORDER BY order_date
+        ) AS prev_order_date,
+
+        -- Running total per customer
+        SUM(amount) OVER (
+            PARTITION BY customer_id 
+            ORDER BY order_date
+        ) AS running_total
+
+    FROM clean_orders
+),
+
+final_metrics AS (
+    SELECT 
+        *,
+        
+        -- Days between orders
+        DATEDIFF(day, prev_order_date, order_date) AS days_between_orders,
+
+        -- Customer segmentation
+        CASE 
+            WHEN running_total >= 10000 THEN 'Platinum'
+            WHEN running_total >= 5000 THEN 'Gold'
+            WHEN running_total >= 2000 THEN 'Silver'
+            ELSE 'Regular'
+        END AS customer_segment
+
+    FROM customer_metrics
+),
+
+region_ranking AS (
+    SELECT 
+        *,
+        
+        -- Rank customers by total spend per region
+        RANK() OVER (
+            PARTITION BY region 
+            ORDER BY running_total DESC
+        ) AS region_rank
+
+    FROM final_metrics
+)
+
+SELECT 
+    customer_id,
+    customer_name,
+    region,
+    order_id,
+    order_date,
+    amount,
+    days_between_orders,
+    customer_segment,
+    region_rank,
+
+    -- Flag for top customers
+    CASE 
+        WHEN region_rank <= 3 THEN 'Top Customer'
+        ELSE 'Normal'
+    END AS customer_flag
+
+FROM region_ranking
+
+-- Filter: only recent active customers
+WHERE order_date >= DATEADD(year, -1, CURRENT_DATE)
+
+ORDER BY region, region_rank, order_date DESC;
