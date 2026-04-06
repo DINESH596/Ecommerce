@@ -1,0 +1,54 @@
+WITH sales_cte AS (
+    SELECT 
+        c.customer_id,
+        c.customer_name,
+        o.order_id,
+        o.order_date,
+        o.amount,
+        o.region
+    FROM customers c
+    JOIN orders o 
+        ON c.customer_id = o.customer_id
+    WHERE o.order_date >= '2025-01-01'
+),
+
+aggregated AS (
+    SELECT
+        customer_id,
+        customer_name,
+        region,
+        COUNT(order_id) AS total_orders,
+        SUM(amount) AS total_sales,
+        AVG(amount) AS avg_order_value
+    FROM sales_cte
+    GROUP BY customer_id, customer_name, region
+    HAVING SUM(amount) > 1000
+)
+
+SELECT 
+    a.*,
+
+    -- Ranking (Window Function)
+    RANK() OVER (PARTITION BY region ORDER BY total_sales DESC) AS rank_in_region,
+
+    -- Running total
+    SUM(total_sales) OVER (PARTITION BY region ORDER BY total_sales DESC) AS running_sales,
+
+    -- Case statement
+    CASE 
+        WHEN total_sales >= 5000 THEN 'High Value'
+        WHEN total_sales >= 2000 THEN 'Medium Value'
+        ELSE 'Low Value'
+    END AS customer_category,
+
+    -- Subquery (global comparison)
+    (SELECT AVG(total_sales) FROM aggregated) AS overall_avg_sales
+
+FROM aggregated a
+
+-- Filtering using subquery
+WHERE total_sales > (
+    SELECT AVG(total_sales) FROM aggregated
+)
+
+ORDER BY region, total_sales DESC;
